@@ -85,7 +85,7 @@ export function registerVideoCommands(program: Command): void {
           console.log(formatSuccess('Video generation queued!'));
           console.log(`\n${c.dim('Queue ID:')} ${c.cyan(result.queue_id)}`);
           console.log(`${c.dim('Model:')} ${result.model}`);
-          console.log(`\n${c.dim('Check status with:')} venice video status ${result.queue_id}`);
+          console.log(`\n${c.dim('Check status with:')} venice video status ${result.queue_id} -m ${result.model}`);
         }
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
@@ -97,6 +97,7 @@ export function registerVideoCommands(program: Command): void {
   video
     .command('status <queueId>')
     .description('Check status of a video generation job')
+    .requiredOption('-m, --model <model>', 'Model used for generation')
     .option('-w, --wait', 'Wait for completion (poll every 5s)')
     .option('-f, --format <format>', 'Output format (pretty|json)')
     .action(async (queueId: string, options) => {
@@ -104,44 +105,46 @@ export function registerVideoCommands(program: Command): void {
       const c = getChalk();
 
       const checkStatus = async (): Promise<void> => {
-        const result = await getVideoStatus(queueId);
+        const result = await getVideoStatus(queueId, options.model);
 
         if (format === 'json') {
           console.log(JSON.stringify(result, null, 2));
           return;
         }
 
+        const statusLabel = result.status.toLowerCase();
         const statusColors: Record<string, (s: string) => string> = {
-          pending: c.yellow,
           processing: c.blue,
           completed: c.green,
           failed: c.red,
         };
 
-        const colorFn = statusColors[result.status] || c.white;
+        const colorFn = statusColors[statusLabel] || c.yellow;
         console.log(`${c.dim('Status:')} ${colorFn(result.status)}`);
 
-        if (result.progress !== undefined) {
-          console.log(`${c.dim('Progress:')} ${result.progress}%`);
+        if (result.average_execution_time) {
+          const remainMs = Math.max(0, result.average_execution_time - (result.execution_duration || 0));
+          console.log(`${c.dim('Estimated remaining:')} ~${Math.ceil(remainMs / 1000)}s`);
         }
 
-        if (result.status === 'completed' && result.video_url) {
+        if (result.video_url) {
           console.log(`\n${c.dim('Video URL:')} ${c.cyan(result.video_url)}`);
-          console.log(`\n${c.dim('Download with:')} venice video retrieve ${queueId}`);
+          console.log(`\n${c.dim('Download with:')} venice video retrieve ${queueId} -m ${options.model}`);
         }
 
-        if (result.status === 'failed' && result.error) {
+        if (result.error) {
           console.error(`\n${c.red('Error:')} ${result.error}`);
         }
       };
 
       try {
         if (options.wait) {
-          let status = await getVideoStatus(queueId);
-          while (status.status === 'pending' || status.status === 'processing') {
-            console.log(`Status: ${status.status}${status.progress ? ` (${status.progress}%)` : ''} - waiting...`);
+          let status = await getVideoStatus(queueId, options.model);
+          while (status.status === 'PROCESSING') {
+            const elapsed = status.execution_duration ? `${Math.ceil(status.execution_duration / 1000)}s` : '';
+            console.log(`Status: ${status.status}${elapsed ? ` (${elapsed} elapsed)` : ''} - waiting...`);
             await new Promise(resolve => setTimeout(resolve, 5000));
-            status = await getVideoStatus(queueId);
+            status = await getVideoStatus(queueId, options.model);
           }
           if (format === 'json') {
             console.log(JSON.stringify(status, null, 2));
@@ -162,6 +165,7 @@ export function registerVideoCommands(program: Command): void {
     .command('retrieve <queueId>')
     .alias('download')
     .description('Download a completed video')
+    .requiredOption('-m, --model <model>', 'Model used for generation')
     .option('-o, --output <path>', 'Output file path', 'output.mp4')
     .option('-f, --format <format>', 'Output format (pretty|json)')
     .action(async (queueId: string, options) => {
@@ -169,10 +173,20 @@ export function registerVideoCommands(program: Command): void {
       const c = getChalk();
 
       try {
-        const result = await retrieveVideo(queueId);
+        const result = await retrieveVideo(queueId, options.model);
 
         if (format === 'json') {
           console.log(JSON.stringify(result, null, 2));
+          return;
+        }
+
+        if (!result.video_url) {
+          if (result.status) {
+            console.log(`${c.dim('Status:')} ${c.yellow(result.status)} — video not ready yet.`);
+            console.log(`${c.dim('Try again with:')} venice video retrieve ${queueId} -m ${options.model}`);
+          } else {
+            console.error(formatError('No video URL returned. The video may still be processing.'));
+          }
           return;
         }
 

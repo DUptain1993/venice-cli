@@ -693,11 +693,8 @@ export async function queueVideoGeneration(
     model: options.model || 'wan-2.6-text-to-video',
     prompt,
     duration: options.duration || '5s',
+    aspect_ratio: options.aspectRatio || '16:9',
   };
-
-  if (options.aspectRatio) {
-    body.aspect_ratio = options.aspectRatio;
-  }
   if (options.imageUrl) {
     body.image_url = options.imageUrl;
   }
@@ -721,29 +718,35 @@ export async function queueVideoGeneration(
 
 // Video generation - check status / retrieve result
 export async function getVideoStatus(
-  queueId: string
+  queueId: string,
+  model: string
 ): Promise<{
-  status: 'pending' | 'processing' | 'completed' | 'failed';
+  status: 'PROCESSING' | 'completed' | 'failed';
+  average_execution_time?: number;
+  execution_duration?: number;
   video_url?: string;
   error?: string;
-  progress?: number;
 }> {
-  return apiRequest(`/video/retrieve?queue_id=${encodeURIComponent(queueId)}`, {
-    method: 'GET',
+  return apiRequest('/video/retrieve', {
+    method: 'POST',
+    body: { queue_id: queueId, model },
     spinnerText: 'Checking video status...',
   });
 }
 
 // Video generation - retrieve video
 export async function retrieveVideo(
-  queueId: string
+  queueId: string,
+  model: string
 ): Promise<{
-  video_url: string;
+  video_url?: string;
+  status?: string;
   model: string;
   duration?: number;
 }> {
-  return apiRequest(`/video/retrieve?queue_id=${encodeURIComponent(queueId)}`, {
-    method: 'GET',
+  return apiRequest('/video/retrieve', {
+    method: 'POST',
+    body: { queue_id: queueId, model, delete_media_on_completion: false },
     spinnerText: 'Retrieving video...',
   });
 }
