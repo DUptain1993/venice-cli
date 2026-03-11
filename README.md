@@ -85,13 +85,13 @@ venice chat -f json "List 3 colors" | jq '.content'
 venice chat --no-stream "Quick question"
 
 # E2EE encrypted chat (auto-enabled for E2EE models)
-venice chat -m e2ee-deepseek-v3-1 "This message is end-to-end encrypted"
+venice chat -m e2ee-qwen3-30b-a3b "This message is end-to-end encrypted"
 
 # Show TEE attestation details
-venice chat -m e2ee-deepseek-v3-1 --tee-verify "Verify the secure enclave"
+venice chat -m e2ee-qwen3-30b-a3b --tee-verify "Verify the secure enclave"
 
 # Quiet mode - E2EE without status messages (looks like normal chat)
-venice chat -m e2ee-deepseek-v3-1 -q "This is encrypted but looks like normal chat"
+venice chat -m e2ee-qwen3-30b-a3b -q "This is encrypted but looks like normal chat"
 ```
 
 **Options:**
@@ -238,19 +238,19 @@ Venice supports Trusted Execution Environment (TEE) attestation for models runni
 
 ```bash
 # Fetch and display TEE attestation for a model
-venice tee attestation e2ee-deepseek-v3-1
+venice tee attestation e2ee-qwen3-30b-a3b
 
 # With verbose TDX quote details
-venice tee attestation --verbose e2ee-deepseek-v3-1
+venice tee attestation --verbose e2ee-qwen3-30b-a3b
 
 # Run full E2EE policy verification
-venice tee verify e2ee-deepseek-v3-1
+venice tee verify e2ee-qwen3-30b-a3b
 
 # Verify a response signature (requires completion ID from a previous request)
-venice tee signature e2ee-deepseek-v3-1 <completion-id>
+venice tee signature e2ee-qwen3-30b-a3b <completion-id>
 
 # Verify signature matches expected signer address
-venice tee signature e2ee-deepseek-v3-1 <completion-id> --verify-signer 0x123...
+venice tee signature e2ee-qwen3-30b-a3b <completion-id> --verify-signer 0x123...
 ```
 
 **TEE Commands:**
@@ -462,7 +462,7 @@ E2EE models provide the highest level of privacy. When using an E2EE model:
 venice models --e2ee
 
 # Chat with E2EE (auto-enabled for E2EE models)
-venice chat -m e2ee-deepseek-v3-1 "Your private message here"
+venice chat -m e2ee-qwen3-30b-a3b "Your private message here"
 ```
 
 **Note:** E2EE mode disables tools and web search to maintain end-to-end encryption.
