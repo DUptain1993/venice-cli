@@ -27,7 +27,7 @@ const EC = elliptic.ec;
 // Configuration
 const API_KEY = process.env.VENICE_API_KEY;
 const BASE_URL = process.env.VENICE_API_BASE_URL || 'https://api.venice.ai/api/v1';
-const MODEL = 'e2ee-qwen3-30b-a3b'; // E2EE-capable model
+const MODEL = 'e2ee-qwen3-5-122b-a10b'; // E2EE-capable model
 const HKDF_INFO = 'ecdsa_encryption';
 
 if (!API_KEY) {

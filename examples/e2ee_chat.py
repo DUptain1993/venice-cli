@@ -26,7 +26,7 @@ from ecdsa import SECP256k1, VerifyingKey, SigningKey
 # Configuration
 API_KEY = os.environ.get('VENICE_API_KEY')
 BASE_URL = os.environ.get('VENICE_API_BASE_URL', 'https://api.venice.ai/api/v1')
-MODEL = 'e2ee-qwen3-30b-a3b'  # E2EE-capable model
+MODEL = 'e2ee-qwen3-5-122b-a10b'  # E2EE-capable model
 HKDF_INFO = b'ecdsa_encryption'
 
 if not API_KEY:
