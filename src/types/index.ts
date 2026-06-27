@@ -55,32 +55,6 @@ export interface ChatCompletionOptions {
   character?: string;
   tools?: string[];
   continue?: boolean;
-  conversationId?: string;
-}
-
-export interface ImageGenerationOptions {
-  model?: string;
-  output?: string;
-  width?: number;
-  height?: number;
-  format?: OutputFormat;
-}
-
-export interface TTSOptions {
-  voice?: string;
-  model?: string;
-  output?: string;
-}
-
-export interface TranscribeOptions {
-  model?: string;
-  format?: OutputFormat;
-}
-
-export interface SearchOptions {
-  model?: string;
-  results?: number;
-  format?: OutputFormat;
 }
 
 export interface ConversationEntry {
@@ -100,32 +74,15 @@ export interface UsageRecord {
   total_tokens?: number;
 }
 
-export interface ModelCapabilities {
-  privacy?: boolean;
-  supportsTeeAttestation?: boolean;
-  supportsE2EE?: boolean;
-}
-
 export interface Model {
   id: string;
   type?: string;
   model_spec?: {
     description?: string;
-    capabilities?: ModelCapabilities;
+    capabilities?: {
+      privacy?: boolean;
+    };
   };
-}
-
-export const isE2EEModel = (model: Model): boolean =>
-  model.type === 'text' && model.model_spec?.capabilities?.supportsE2EE === true;
-
-export const isTEEModel = (model: Model): boolean =>
-  model.model_spec?.capabilities?.supportsTeeAttestation === true;
-
-export interface Character {
-  id: string;
-  name: string;
-  description?: string;
-  system_prompt?: string;
 }
 
 export interface ApiResponse<T = unknown> {
