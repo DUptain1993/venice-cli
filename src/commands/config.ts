@@ -196,7 +196,8 @@ export async function runConfigInit(): Promise<void> {
       let textModels: string[] = [];
       let imageModels: string[] = [];
       try {
-        const models = await listModels();
+        // Pass showSpinner:false — config wizard owns the spinner
+        const models = await listModels({ showSpinner: false });
         clearSpinner();
         textModels = models.filter(m => m.type === 'text').map(m => m.id);
         imageModels = models.filter(m => m.type === 'image').map(m => m.id);
@@ -211,7 +212,8 @@ export async function runConfigInit(): Promise<void> {
       if (textModels.length > 0) {
         const displayModels = textModels.slice(0, 8);
         displayModels.forEach((m, i) => console.log(`    ${c.dim(`${i + 1}.`)} ${m}`));
-        const choice = await question(`\n  Choice [1-${displayModels.length}] or model name [gemma-4-uncensored]: `);
+        clearSpinner();
+        const choice = await question(`\n  Choice [1-${displayModels.length}] or press Enter for [gemma-4-uncensored]: `);
         const trimmed = choice.trim();
         const num = parseInt(trimmed, 10);
         if (!isNaN(num) && num >= 1 && num <= displayModels.length) {
@@ -221,11 +223,13 @@ export async function runConfigInit(): Promise<void> {
           setConfigValue('default_model', trimmed);
           console.log(formatSuccess(`Default model: ${trimmed}`));
         } else {
-          console.log(c.dim('  Using default: gemma-4-uncensored'));
+          setConfigValue('default_model', 'gemma-4-uncensored');
+          console.log(formatSuccess('Default model: gemma-4-uncensored'));
         }
       } else {
-        const model = await question('  Default chat model [gemma-4-uncensored]: ');
-        if (model.trim()) setConfigValue('default_model', model.trim());
+        clearSpinner();
+        const model = await question('  Default chat model (press Enter for gemma-4-uncensored): ');
+        setConfigValue('default_model', model.trim() || 'gemma-4-uncensored');
       }
       console.log('');
 
@@ -234,7 +238,8 @@ export async function runConfigInit(): Promise<void> {
       if (imageModels.length > 0) {
         const displayImg = imageModels.slice(0, 6);
         displayImg.forEach((m, i) => console.log(`    ${c.dim(`${i + 1}.`)} ${m}`));
-        const choice = await question(`\n  Choice [1-${displayImg.length}] or model name [flux-2-pro]: `);
+        clearSpinner();
+        const choice = await question(`\n  Choice [1-${displayImg.length}] or press Enter for [flux-2-pro]: `);
         const trimmed = choice.trim();
         const num = parseInt(trimmed, 10);
         if (!isNaN(num) && num >= 1 && num <= displayImg.length) {
@@ -247,7 +252,8 @@ export async function runConfigInit(): Promise<void> {
           console.log(c.dim('  Using default: flux-2-pro'));
         }
       } else {
-        const imgModel = await question('  Default image model [flux-2-pro]: ');
+        clearSpinner();
+        const imgModel = await question('  Default image model (press Enter for flux-2-pro): ');
         if (imgModel.trim()) setConfigValue('default_image_model', imgModel.trim());
       }
       console.log('');
@@ -255,11 +261,13 @@ export async function runConfigInit(): Promise<void> {
 
     // Step 4: Preferences
     console.log(c.bold('Step 4/4: Preferences'));
+    clearSpinner();
     const showUsage = await question('  Show token usage after responses? [Y/n]: ');
     if (showUsage.trim().toLowerCase() === 'n') {
       setConfigValue('show_usage', 'false');
     }
 
+    clearSpinner();
     const colors = await question('  Enable color output? [Y/n]: ');
     if (colors.trim().toLowerCase() === 'n') {
       setConfigValue('no_color', 'true');
@@ -271,8 +279,7 @@ export async function runConfigInit(): Promise<void> {
     console.log(`    ${c.cyan('venice chat "Hello!"')}              Chat with AI`);
     console.log(`    ${c.cyan('venice repl')}                       Interactive session`);
     console.log(`    ${c.cyan('venice suggest "find large files"')}  Shell command helper`);
-    console.log(`    ${c.cyan('venice chat --codebase "review"')}   Full project context`);
-    console.log(`    ${c.cyan('venice image "a sunset"')}           Generate image\n`);
+    console.log(`    ${c.cyan('venice chat --codebase "review"')}   Full project context\n`);
   } finally {
     rl.close();
   }

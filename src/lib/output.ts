@@ -37,13 +37,13 @@ let currentSpinner: Ora | null = null;
 
 export function startSpinner(text: string): Ora | null {
   if (!process.stdout.isTTY) return null;
-  
-  currentSpinner = ora({
-    text,
-    color: 'cyan',
-    spinner: 'dots',
-  }).start();
-  
+
+  if (currentSpinner) {
+    currentSpinner.stop();
+    currentSpinner = null;
+  }
+
+  currentSpinner = ora({ text, color: 'cyan', spinner: 'dots' }).start();
   return currentSpinner;
 }
 
