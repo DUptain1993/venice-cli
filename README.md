@@ -5,9 +5,22 @@
 [![npm version](https://badge.fury.io/js/veniceai-cli.svg)](https://www.npmjs.com/package/veniceai-cli)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-The official command-line interface for [Venice AI](https://venice.ai). Chat with AI models, generate images, convert text to speech, transcribe audio, and more—all from your terminal.
+The official command-line interface for [Venice AI](https://venice.ai). Chat with AI models, generate images, convert text to speech, transcribe audio, and more — all from your terminal. Full codebase context, agentic file tools, and an interactive REPL make it as capable as GitHub Copilot CLI and Gemini CLI.
 
 ## Installation
+
+### Termux (Android) — one-liner
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DUptain1993/venice-cli/main/install.sh | sh
+```
+
+The installer automatically:
+- Detects Termux and installs Node.js via `pkg` if needed
+- Fixes npm global prefix to `$PREFIX`
+- Adds `$PREFIX/bin` to your PATH
+
+### Linux / macOS
 
 ```bash
 npm install -g veniceai-cli
@@ -23,13 +36,16 @@ npx veniceai-cli chat 'Hello, world!'
 
 1. **Get your API key** from [Venice AI Settings](https://venice.ai/settings/api)
 
-2. **Configure the CLI**:
+2. **Run the setup wizard**:
+   ```bash
+   venice setup
+   ```
+   This tests your connection, shows your available models by number, and saves everything to `~/.venice/config.json`.
+
+   Or set the key manually:
    ```bash
    venice config set api_key YOUR_API_KEY
-   ```
-   
-   Or use an environment variable:
-   ```bash
+   # or via env var:
    export VENICE_API_KEY=YOUR_API_KEY
    ```
 
@@ -38,9 +54,19 @@ npx veniceai-cli chat 'Hello, world!'
    venice chat "What is the meaning of life?"
    ```
 
+4. **Launch the interactive REPL** for a full session with file tools:
+   ```bash
+   venice repl
+   ```
+
 ## Features
 
 - 🤖 **Chat** with state-of-the-art AI models
+- 🖥️ **Interactive REPL** with persistent conversation and file tools
+- 📁 **Full Codebase Context** — load your entire project into AI context
+- 🔧 **Agentic File Tools** — read, write, edit, search, delete files and run shell commands
+- 💡 **Shell Suggestions** — describe a task, get the right command (Termux-aware)
+- 📱 **Termux Native** — plug-and-play on Android with one-liner install
 - 🔐 **End-to-End Encryption (E2EE)** for maximum privacy
 - 🛡️ **TEE Attestation** verification for trusted execution
 - 🔍 **Web Search** with AI-powered synthesis
@@ -49,7 +75,6 @@ npx veniceai-cli chat 'Hello, world!'
 - 🎤 **Speech-to-Text** transcription with timestamps
 - 🎬 **Video Generation** (text-to-video, image-to-video)
 - 📐 **Embeddings** generation
-- 🔧 **Function Calling** with built-in tools
 - 🎭 **Character Personas** for fun interactions
 - 💾 **Conversation History** with continue mode
 - 📊 **Usage Tracking** for token monitoring
@@ -81,8 +106,26 @@ venice chat -t calculator,weather "What's 25 * 4.5?"
 # JSON output for scripting
 venice chat -f json "List 3 colors" | jq '.content'
 
-# Disable streaming
-venice chat --no-stream "Quick question"
+# ── Codebase & file context ──────────────────────────────────────────────────
+
+# Load your entire project into context
+venice chat --codebase "Summarize this codebase and identify potential improvements"
+
+# Load context from a specific directory
+venice chat --codebase ./src "Explain the architecture of the source files"
+
+# Load specific files
+venice chat --file src/index.ts src/lib/api.ts "What does this code do?"
+
+# ── Agent mode (AI can read/write/run files) ─────────────────────────────────
+
+# Enable file + shell tools
+venice chat --agent "Find all TODO comments in the codebase and create a summary"
+
+# Skip confirmation prompts
+venice chat --agent --auto-approve "Fix the TypeScript errors in src/commands/chat.ts"
+
+# ── Privacy & encryption ─────────────────────────────────────────────────────
 
 # E2EE encrypted chat (auto-enabled based on model capabilities)
 venice chat -m e2ee-qwen3-5-122b-a10b "This message is end-to-end encrypted"
@@ -113,11 +156,137 @@ venice chat -m e2ee-qwen3-5-122b-a10b -q "This is encrypted but looks like norma
 | `--strip-thinking` | Strip thinking blocks from response |
 | `--no-venice-prompt` | Disable Venice system prompts |
 | `--search-results-in-stream` | Include search results in stream |
+| `--file <paths...>` | Load specific files into context |
+| `--codebase [dir]` | Load entire codebase into context |
+| `--codebase-tokens <n>` | Token budget for codebase (default: 80000) |
+| `--agent` | Enable all file + shell tools |
+| `--auto-approve` | Auto-approve all tool calls without prompting |
 | `--e2ee` | Enable E2EE encryption (auto-enabled for models with E2EE capability) |
-| `--no-e2ee` | Disable E2EE, use TEE-only mode (verifies attestation without encryption) |
+| `--no-e2ee` | Disable E2EE, use TEE-only mode |
 | `--tee-verify` | Show TEE attestation details |
 | `-q, --quiet` | Hide E2EE/TEE status messages (show only response) |
 | `-f, --format <format>` | Output format (pretty\|json\|markdown\|raw) |
+
+---
+
+### REPL (Interactive Session)
+
+The REPL provides a persistent, multi-turn conversation with full file system access — like having a coding assistant always available.
+
+```bash
+# Start the REPL
+venice repl
+
+# Start with a model
+venice repl -m llama-3.3-70b
+
+# Load your project into context at startup
+venice repl --codebase
+
+# Load a specific directory
+venice repl --codebase --codebase-dir ./src
+
+# Skip tool approval prompts
+venice repl --auto-approve
+```
+
+**Slash commands inside the REPL:**
+
+| Command | Description |
+|---------|-------------|
+| `/help` | Show all available commands |
+| `/exit` or `/quit` | Exit the REPL |
+| `/clear` | Clear conversation history (keep context) |
+| `/model [name]` | Show current model or switch to a new one |
+| `/files [dir]` | Load codebase from a directory into context |
+| `/file <path>` | Load a specific file into context |
+| `/tools [on\|off]` | List tools or enable/disable them |
+| `/approve` | Toggle auto-approve for tool calls |
+| `/history` | Show recent conversation messages |
+| `/save [filename]` | Save conversation to a JSON file |
+
+**Example session:**
+
+```
+venice> /files ./src
+✓ Loaded 12 files (~8400 tokens)
+
+venice> what does the chat command do?
+The chat command handles... [AI explains]
+
+venice> /model llama-3.3-70b
+Model switched to: llama-3.3-70b
+
+venice> write a test for the config module
+[AI writes the test, calling write_file with your approval]
+
+venice> /exit
+Goodbye!
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-m, --model <model>` | Model to use |
+| `-s, --system <prompt>` | Additional system prompt |
+| `--codebase` | Load codebase into context at startup |
+| `--codebase-dir <dir>` | Directory for codebase context |
+| `--auto-approve` | Auto-approve all tool calls |
+| `--max-tokens <n>` | Token budget for codebase context |
+| `--no-tools` | Disable file system and shell tools |
+| `-t, --tools <tools>` | Additional tools to enable |
+
+---
+
+### Shell Suggestions
+
+Get shell commands by describing what you want — Termux-aware, platform-specific.
+
+```bash
+# Get a shell command suggestion
+venice suggest "recursively find all TypeScript files modified today"
+
+# Termux-specific suggestions
+venice suggest "install the requests library" --platform termux
+# → pkg install python && pip install requests
+
+# Run the suggested command immediately
+venice suggest "show disk usage sorted by size" --execute
+
+# Target a specific shell
+venice suggest "loop over all JSON files" --shell zsh
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-m, --model <model>` | Model to use |
+| `--shell <shell>` | Target shell: bash, zsh, fish, sh |
+| `--platform <platform>` | Target platform: linux, macos, termux |
+| `--execute` | Run the suggested command after confirmation |
+
+---
+
+### Setup Wizard
+
+First-time setup with live model selection:
+
+```bash
+venice setup
+# or equivalently:
+venice config init
+```
+
+The wizard:
+1. Prompts for your API key and tests the connection
+2. Fetches your available models and shows a numbered list to pick from
+3. Sets your default image model
+4. Configures preferences (usage display, colors)
+5. Prints quick-start commands
+
+---
 
 ### Web Search
 
@@ -300,7 +469,10 @@ venice embeddings -o vectors.json "Text to embed"
 ### Configuration
 
 ```bash
-# Interactive setup
+# Recommended: interactive setup wizard
+venice setup
+
+# Or: interactive setup via config subcommand
 venice config init
 
 # Show current config
@@ -332,6 +504,9 @@ venice config path
 | `output_format` | Default output format |
 | `no_color` | Disable colored output |
 | `show_usage` | Show token usage after requests |
+| `auto_approve` | Auto-approve tool calls without prompting |
+| `max_context_tokens` | Token budget for `--codebase` (default: 80000) |
+| `shell` | Preferred shell for `venice suggest` |
 
 ### Conversation History
 
@@ -397,9 +572,11 @@ venice completions zsh >> ~/.zshrc
 venice completions fish > ~/.config/fish/completions/venice.fish
 ```
 
+---
+
 ## Built-in Tools
 
-The CLI includes several built-in tools for function calling:
+The CLI includes built-in tools for function calling. Use them with `--tools` or enable all file/shell tools at once with `--agent`.
 
 | Tool | Description |
 |------|-------------|
@@ -409,15 +586,35 @@ The CLI includes several built-in tools for function calling:
 | `random` | Random number/choice generation |
 | `base64` | Base64 encoding/decoding |
 | `hash` | Hash generation (md5, sha256, etc.) |
+| `read_file` | Read file contents (supports offset/limit, max 1MB) |
+| `write_file` | Write or overwrite a file (creates parent dirs) |
+| `list_files` | List directory recursively with glob filter |
+| `search_files` | Regex search across files, returns file + line + match |
+| `delete_file` | Delete a file (requires `confirm: true`) |
+| `run_shell` | Execute a shell command, returns stdout/stderr/exit code |
+
+> **Safety:** `write_file`, `delete_file`, and `run_shell` always prompt for approval unless `--auto-approve` is set.
 
 ```bash
-# Use tools
+# Use individual tools
 venice chat -t calculator "What's the square root of 144?"
 venice chat -t datetime "What day is it today?"
 
-# Interactive tool approval
+# Approve each tool call interactively
 venice chat --interactive-tools -t calculator "Calculate 15% tip on $85"
+
+# Agent mode: enable all file + shell tools
+venice chat --agent "Find all TODO comments and create a TASKS.md"
+
+# Agent mode with auto-approve (no prompts)
+venice chat --agent --auto-approve "Add JSDoc comments to all exported functions in src/lib/"
+
+# Load the codebase and ask questions
+venice chat --codebase "What is the entry point of this application?"
+venice chat --codebase ./src "Which files would I need to change to add a new command?"
 ```
+
+---
 
 ## Output Formats
 
@@ -438,15 +635,49 @@ venice chat -f json "List items" | jq '.'
 venice chat "Generate code" | pbcopy
 ```
 
+---
+
+## Termux (Android)
+
+Venice CLI runs natively on Android via [Termux](https://termux.dev) with no extra configuration needed.
+
+```bash
+# One-liner install (installs Node.js via pkg if needed):
+curl -fsSL https://raw.githubusercontent.com/DUptain1993/venice-cli/main/install.sh | sh
+
+# First-time setup:
+venice setup
+
+# Start an interactive session with file tools:
+venice repl
+```
+
+The installer handles:
+- Detecting Termux and running `pkg install nodejs` if Node.js is missing
+- Setting the npm global prefix to `$PREFIX` so `venice` is in your PATH
+- Adding `$PREFIX/bin` to `~/.bashrc` and `~/.profile` if needed
+
+**Termux-aware suggestions:** `venice suggest` automatically detects Termux and produces Android-appropriate commands:
+
+```bash
+venice suggest "install python"
+# → pkg install python
+
+venice suggest "update all packages"
+# → pkg update && pkg upgrade
+```
+
+---
+
 ## Privacy
 
 Venice CLI is designed with privacy in mind:
 
-- **End-to-End Encryption (E2EE)**: Messages encrypted client-side, decrypted only in the TEE—Venice cannot read your data
+- **End-to-End Encryption (E2EE)**: Messages encrypted client-side, decrypted only in the TEE — Venice cannot read your data
 - **TEE Attestation**: Cryptographically verify that models run in secure enclaves before sending data
 - **No browser tracking**: Terminal interactions don't expose browser metadata
 - **No telemetry**: The CLI doesn't collect or send usage data
-- **Local configuration**: API key stored locally with restricted permissions
+- **Local configuration**: API key stored locally with restricted permissions (mode `0o600`)
 - **Transparent**: You can see exactly what's being sent to the API
 - **Privacy-preserving models**: Use `venice models --privacy` to find models with no data retention
 
@@ -485,6 +716,8 @@ venice models --tee
 venice chat -m <tee-capable-model> "Verified secure execution"
 ```
 
+---
+
 ## Environment Variables
 
 | Variable | Description |
@@ -492,10 +725,14 @@ venice chat -m <tee-capable-model> "Verified secure execution"
 | `VENICE_API_KEY` | API key (overrides config file) |
 | `NO_COLOR` | Disable colored output |
 
+---
+
 ## Requirements
 
 - Node.js 18.0.0 or higher
-- A Venice AI API key
+- A Venice AI API key ([get one here](https://venice.ai/settings/api))
+
+---
 
 ## Development
 
@@ -512,6 +749,9 @@ npm run build
 
 # Run locally
 npm run dev -- chat "Hello"
+
+# Run the REPL locally
+npm run dev -- repl
 ```
 
 ## Contributing
