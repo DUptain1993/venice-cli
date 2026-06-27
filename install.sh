@@ -1,11 +1,12 @@
 #!/bin/sh
 # Venice CLI — Termux-Native Install Script
-# Usage: curl -fsSL https://raw.githubusercontent.com/duptain1993/venice-cli/main/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/DUptain1993/venice-cli/main/install.sh | sh
 # Or:    sh install.sh
 
 set -e
 
-PACKAGE="veniceai-cli"
+REPO_URL="https://github.com/DUptain1993/venice-cli.git"
+BRANCH="main"
 BIN_NAME="venice"
 
 log()  { printf '\033[1;34m[venice]\033[0m %s\n' "$*"; }
@@ -13,12 +14,10 @@ ok()   { printf '\033[1;32m[venice]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[venice]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[venice]\033[0m %s\n' "$*" >&2; exit 1; }
 
-# Detect environment
 is_termux() {
   [ -n "$PREFIX" ] && echo "$PREFIX" | grep -q 'com.termux'
 }
 
-# Check Node.js version
 check_node() {
   if ! command -v node >/dev/null 2>&1; then
     return 1
@@ -42,7 +41,6 @@ if is_termux; then
   NODE_VERSION=$(node --version)
   ok "Node.js $NODE_VERSION ready"
 
-  # Ensure npm prefix is set to $PREFIX so global installs work in Termux
   CURRENT_PREFIX=$(npm config get prefix 2>/dev/null || echo "")
   if [ "$CURRENT_PREFIX" != "$PREFIX" ]; then
     log "Setting npm global prefix to \$PREFIX ($PREFIX)..."
@@ -62,21 +60,54 @@ Or via nvm: https://github.com/nvm-sh/nvm"
   ok "Node.js $NODE_VERSION ready"
 fi
 
-# ── Install venice CLI ───────────────────────────────────────────────────────
+# ── Ensure git is available ──────────────────────────────────────────────────
 
-log "Installing $PACKAGE globally..."
+if ! command -v git >/dev/null 2>&1; then
+  if is_termux; then
+    log "Installing git via pkg..."
+    pkg install git -y || die "Failed to install git. Run: pkg install git"
+  else
+    die "git is required but not found. Install it and try again."
+  fi
+fi
+
+# ── Clone and build from GitHub ──────────────────────────────────────────────
+
+INSTALL_SRC="$HOME/.venice-cli-src"
+
+if [ -d "$INSTALL_SRC/.git" ]; then
+  log "Updating existing source in $INSTALL_SRC..."
+  git -C "$INSTALL_SRC" fetch --depth=1 origin "$BRANCH" 2>&1 | grep -v '^$' || true
+  git -C "$INSTALL_SRC" reset --hard "origin/$BRANCH" 2>&1 | grep -v '^$' || true
+else
+  log "Cloning venice CLI from GitHub..."
+  rm -rf "$INSTALL_SRC"
+  git clone --depth=1 --branch "$BRANCH" "$REPO_URL" "$INSTALL_SRC" 2>&1 | grep -v '^$' || \
+    die "Failed to clone repository. Check your internet connection."
+fi
+
+log "Installing dependencies and building..."
+cd "$INSTALL_SRC"
+npm install --prefer-offline 2>&1 | tail -3 || npm install 2>&1 | tail -3 || \
+  die "npm install failed. Check your internet connection."
+
+npm run build 2>&1 | tail -3 || die "Build failed."
+
+# ── Install venice CLI globally ──────────────────────────────────────────────
+
+log "Installing venice globally..."
 
 if is_termux; then
-  npm install -g "$PACKAGE" --prefix "$PREFIX" 2>&1 || {
-    warn "Global install failed. Trying with --unsafe-perm..."
-    npm install -g "$PACKAGE" --prefix "$PREFIX" --unsafe-perm 2>&1 || \
-      die "Installation failed. Check your internet connection and try again."
+  npm install -g . --prefix "$PREFIX" 2>&1 | tail -3 || {
+    warn "Retrying with --unsafe-perm..."
+    npm install -g . --prefix "$PREFIX" --unsafe-perm 2>&1 | tail -3 || \
+      die "Installation failed."
   }
 else
-  npm install -g "$PACKAGE" 2>&1 || {
+  npm install -g . 2>&1 | tail -3 || {
     warn "Trying with sudo..."
-    sudo npm install -g "$PACKAGE" 2>&1 || \
-      die "Installation failed. Try: npm install -g $PACKAGE"
+    sudo npm install -g . 2>&1 | tail -3 || \
+      die "Installation failed. Try: sudo npm install -g ."
   }
 fi
 
@@ -85,26 +116,20 @@ fi
 if command -v "$BIN_NAME" >/dev/null 2>&1; then
   VERSION=$("$BIN_NAME" --version 2>/dev/null || echo "unknown")
   ok "venice $VERSION installed successfully!"
-else
-  # On Termux, $PREFIX/bin may not be in PATH yet
-  if is_termux && [ -x "$PREFIX/bin/$BIN_NAME" ]; then
-    warn "$BIN_NAME is installed but not in PATH."
-    log "Adding \$PREFIX/bin to PATH in shell config files..."
-
-    for RC in "$HOME/.bashrc" "$HOME/.profile" "$HOME/.zshrc"; do
-      if [ -f "$RC" ] || [ "$RC" = "$HOME/.bashrc" ]; then
-        if ! grep -q 'PREFIX/bin' "$RC" 2>/dev/null; then
-          printf '\nexport PATH="$PREFIX/bin:$PATH"\n' >> "$RC"
-          log "Updated $RC"
-        fi
+elif is_termux && [ -x "$PREFIX/bin/$BIN_NAME" ]; then
+  warn "$BIN_NAME installed but not in PATH."
+  for RC in "$HOME/.bashrc" "$HOME/.profile" "$HOME/.zshrc"; do
+    if [ -f "$RC" ] || [ "$RC" = "$HOME/.bashrc" ]; then
+      if ! grep -q 'PREFIX/bin' "$RC" 2>/dev/null; then
+        printf '\nexport PATH="$PREFIX/bin:$PATH"\n' >> "$RC"
+        log "Updated $RC"
       fi
-    done
-
-    ok "Run this to activate in current shell: export PATH=\"\$PREFIX/bin:\$PATH\""
-    ok "Or restart Termux to apply permanently."
-  else
-    die "Installation may have failed — 'venice' command not found. Check npm global bin directory."
-  fi
+    fi
+  done
+  ok "Run: export PATH=\"\$PREFIX/bin:\$PATH\""
+  ok "Or restart Termux to apply permanently."
+else
+  die "Installation may have failed — 'venice' not found in PATH."
 fi
 
 # ── Done ─────────────────────────────────────────────────────────────────────

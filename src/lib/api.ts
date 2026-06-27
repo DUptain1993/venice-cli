@@ -1,26 +1,16 @@
 /**
  * Venice AI API Client
- * 
- * Handles all API communication with retry logic and error handling.
  */
 
 import { requireApiKey, trackUsage } from './config.js';
 import { startSpinner, stopSpinner } from './output.js';
 import { getVersion } from './version.js';
-import { Readable } from 'stream';
-import type { Message, ToolDefinition, Model, Character } from '../types/index.js';
-import {
-  MAX_UPSCALE_IMAGE_BYTES,
-  MAX_TRANSCRIPTION_AUDIO_BYTES,
-  assertFileSizeWithinLimit,
-  mimeTypeFromPath,
-} from './media.js';
+import type { Message, ToolDefinition, Model } from '../types/index.js';
 
-// TODO: Remove VENICE_API_BASE_URL override before release - only for local dev testing
 const VENICE_API = process.env.VENICE_API_BASE_URL || 'https://api.venice.ai/api/v1';
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1000;
-const DEFAULT_TIMEOUT_MS = 120000; // 2 minutes default timeout
+const DEFAULT_TIMEOUT_MS = 120000;
 
 export class VeniceApiError extends Error {
   constructor(
@@ -44,7 +34,6 @@ export class VeniceApiError extends Error {
   }
 
   isRetryable(): boolean {
-    // Retry on network errors and 5xx
     if (!this.statusCode) return true;
     return this.statusCode >= 500 && this.statusCode < 600;
   }
@@ -74,12 +63,10 @@ async function checkOnline(): Promise<boolean> {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
-    
     await fetch('https://api.venice.ai/api/v1/models', {
       method: 'HEAD',
       signal: controller.signal,
     });
-    
     clearTimeout(timeout);
     return true;
   } catch {
@@ -202,7 +189,6 @@ export async function apiRequest<T>(
   throw lastError || new Error('Request failed after retries');
 }
 
-// Chat completion (non-streaming)
 export async function chatCompletion(
   messages: Message[],
   options: {
@@ -210,6 +196,7 @@ export async function chatCompletion(
     tools?: ToolDefinition[];
     tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
     venice_parameters?: Record<string, unknown>;
+    system?: string;
   } = {}
 ): Promise<{
   content: string;
@@ -251,7 +238,6 @@ export async function chatCompletion(
   const choice = response.choices?.[0];
   const usage = response.usage;
 
-  // Track usage
   if (usage) {
     trackUsage({
       command: 'chat',
@@ -268,7 +254,6 @@ export async function chatCompletion(
   };
 }
 
-// Chat completion (streaming)
 export async function* chatCompletionStream(
   messages: Message[],
   options: {
@@ -282,7 +267,6 @@ export async function* chatCompletionStream(
   content?: string;
   tool_calls?: any[];
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
-  completionId?: string;
   done: boolean;
 }> {
   const body: Record<string, unknown> = {
@@ -315,7 +299,6 @@ export async function* chatCompletionStream(
   const decoder = new TextDecoder();
   let buffer = '';
   let totalUsage: any = null;
-  let completionId: string | undefined;
 
   try {
     while (true) {
@@ -337,29 +320,24 @@ export async function* chatCompletionStream(
                 ...totalUsage,
               });
             }
-            yield { done: true, usage: totalUsage, completionId };
+            yield { done: true, usage: totalUsage };
             return;
           }
 
           try {
             const json = JSON.parse(data);
             const delta = json.choices?.[0]?.delta;
-            
-            // Capture completion ID for E2EE signature verification
-            if (json.id && !completionId) {
-              completionId = json.id;
-            }
 
             if (json.usage) {
               totalUsage = json.usage;
             }
 
             if (delta?.content) {
-              yield { content: delta.content, done: false, completionId };
+              yield { content: delta.content, done: false };
             }
 
             if (delta?.tool_calls) {
-              yield { tool_calls: delta.tool_calls, done: false, completionId };
+              yield { tool_calls: delta.tool_calls, done: false };
             }
           } catch {
             // Skip malformed JSON
@@ -371,306 +349,16 @@ export async function* chatCompletionStream(
     reader.releaseLock();
   }
 
-  yield { done: true, usage: totalUsage, completionId };
+  yield { done: true, usage: totalUsage };
 }
 
-// Image generation (Venice-native endpoint)
-export async function generateImage(
-  prompt: string,
-  options: {
-    model?: string;
-    width?: number;
-    height?: number;
-    n?: number;
-    format?: 'png' | 'jpeg' | 'webp';
-  } = {}
-): Promise<string[]> {
-  const body: Record<string, unknown> = {
-    model: options.model || 'flux-2-pro',
-    prompt,
-    width: options.width || 1024,
-    height: options.height || 1024,
-    format: options.format || 'png',
-  };
-
-  if (options.n && options.n > 1) {
-    body.variants = options.n;
-  }
-
-  const response = await apiRequest<{
-    id: string;
-    images: string[];
-  }>('/image/generate', {
-    method: 'POST',
-    body,
-    spinnerText: 'Generating image...',
-  });
-
-  trackUsage({
-    command: 'image',
-    model: options.model || 'flux-2-pro',
-  });
-
-  return response.images;
-}
-
-// Image upscale
-export async function upscaleImage(
-  imagePath: string,
-  options: {
-    model?: string;
-    scale?: number;
-  } = {}
-): Promise<{ url: string }> {
-  const fs = await import('fs');
-
-  if (!fs.existsSync(imagePath)) {
-    throw new Error(`File not found: ${imagePath}`);
-  }
-
-  assertFileSizeWithinLimit(imagePath, MAX_UPSCALE_IMAGE_BYTES, 'Image file for upscaling');
-
-  const imageData = await fs.promises.readFile(imagePath);
-  const base64 = imageData.toString('base64');
-  const mimeType = mimeTypeFromPath(imagePath, 'image/png');
-
-  const body = {
-    model: options.model || 'upscaler',
-    image: `data:${mimeType};base64,${base64}`,
-    scale: options.scale || 2,
-  };
-
-  const response = await apiRequest<{
-    data: Array<{ url: string }>;
-  }>('/images/upscale', {
-    method: 'POST',
-    body,
-    spinnerText: 'Upscaling image...',
-  });
-
-  trackUsage({
-    command: 'upscale',
-    model: options.model || 'upscaler',
-  });
-
-  return response.data[0];
-}
-
-// Text to speech
-export async function textToSpeech(
-  text: string,
-  options: {
-    model?: string;
-    voice?: string;
-    format?: 'mp3' | 'wav' | 'opus';
-  } = {}
-): Promise<ArrayBuffer> {
-  const body = {
-    model: options.model || 'tts-kokoro',
-    input: text,
-    voice: options.voice || 'af_sky',
-    response_format: options.format || 'mp3',
-  };
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(`${VENICE_API}/audio/speech`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeoutId);
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw VeniceApiError.fromResponse(response.status, error);
-    }
-
-    trackUsage({
-      command: 'tts',
-      model: options.model || 'tts-kokoro',
-    });
-
-    return response.arrayBuffer();
-  } catch (error) {
-    clearTimeout(timeoutId);
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error('Text-to-speech request timed out. Please try with shorter text.');
-    }
-    throw error;
-  }
-}
-
-// Transcription (STT) -- requires multipart/form-data upload
-export async function transcribe(
-  audioPath: string,
-  options: {
-    model?: string;
-    language?: string;
-    timestamps?: boolean;
-  } = {}
-): Promise<{
-  text: string;
-  duration?: number;
-  timestamps?: {
-    word?: Array<{ word: string; start: number; end: number }>;
-    segment?: Array<{ text: string; start: number; end: number }>;
-  };
-}> {
-  const fs = await import('fs');
-  const path = await import('path');
-  const crypto = await import('crypto');
-
-  if (!fs.existsSync(audioPath)) {
-    throw new Error(`File not found: ${audioPath}`);
-  }
-
-  const fileSize = assertFileSizeWithinLimit(
-    audioPath,
-    MAX_TRANSCRIPTION_AUDIO_BYTES,
-    'Audio file for transcription'
-  );
-  const filename = path.basename(audioPath);
-  const mimeType = mimeTypeFromPath(audioPath, 'application/octet-stream');
-
-  const boundary = `----venice-cli-${crypto.randomUUID()}`;
-  const CRLF = '\r\n';
-  const escapeField = (value: string): string => value.replace(/"/g, '\\"');
-
-  const formFields: Array<[string, string]> = [
-    ['model', options.model || 'nvidia/parakeet-tdt-0.6b-v3'],
-    ['response_format', 'json'],
-  ];
-  if (options.language) {
-    formFields.push(['language', options.language]);
-  }
-  if (options.timestamps) {
-    formFields.push(['timestamp_granularities[]', 'word']);
-    formFields.push(['timestamp_granularities[]', 'segment']);
-  }
-
-  const fieldsPrefix = formFields
-    .map(([name, value]) =>
-      `--${boundary}${CRLF}` +
-      `Content-Disposition: form-data; name="${escapeField(name)}"${CRLF}${CRLF}` +
-      `${value}${CRLF}`
-    )
-    .join('');
-  const fileHeader =
-    `--${boundary}${CRLF}` +
-    `Content-Disposition: form-data; name="file"; filename="${escapeField(filename)}"${CRLF}` +
-    `Content-Type: ${mimeType}${CRLF}${CRLF}`;
-  const closingBoundary = `${CRLF}--${boundary}--${CRLF}`;
-
-  const headerBuffer = Buffer.from(fieldsPrefix + fileHeader, 'utf-8');
-  const footerBuffer = Buffer.from(closingBoundary, 'utf-8');
-  const contentLength = headerBuffer.length + fileSize + footerBuffer.length;
-
-  const multipartBody = Readable.from((async function* () {
-    yield headerBuffer;
-    for await (const chunk of fs.createReadStream(audioPath)) {
-      yield chunk;
-    }
-    yield footerBuffer;
-  })());
-
-  const spinner = startSpinner('Transcribing...');
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
-
-  try {
-    const requestInit: RequestInit & { duplex: 'half' } = {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${requireApiKey()}`,
-        'User-Agent': `venice-cli/${getVersion()}`,
-        'Content-Type': `multipart/form-data; boundary=${boundary}`,
-        'Content-Length': String(contentLength),
-      },
-      body: multipartBody as unknown as RequestInit['body'],
-      duplex: 'half',
-      signal: controller.signal,
-    };
-
-    const res = await fetch(`${VENICE_API}/audio/transcriptions`, {
-      ...requestInit,
-    });
-
-    clearTimeout(timeoutId);
-
-    if (!res.ok) {
-      const errorBody = await res.text();
-      throw VeniceApiError.fromResponse(res.status, errorBody);
-    }
-
-    if (spinner) stopSpinner(true);
-
-    const response = await res.json() as {
-      text: string;
-      duration?: number;
-      timestamps?: {
-        word?: Array<{ word: string; start: number; end: number }>;
-        segment?: Array<{ text: string; start: number; end: number }>;
-      };
-    };
-
-    trackUsage({
-      command: 'transcribe',
-      model: options.model || 'nvidia/parakeet-tdt-0.6b-v3',
-    });
-
-    return response;
-  } catch (error) {
-    clearTimeout(timeoutId);
-    if (spinner) stopSpinner(false);
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error('Transcription request timed out. Try a shorter audio file.');
-    }
-    throw error;
-  }
-}
-
-// Embeddings
-export async function generateEmbeddings(
-  input: string | string[],
-  options: {
-    model?: string;
-  } = {}
-): Promise<{ embedding: number[]; index: number }[]> {
-  const body = {
-    model: options.model || 'text-embedding-ada-002',
-    input: Array.isArray(input) ? input : [input],
-  };
-
-  const response = await apiRequest<{
-    data: Array<{ embedding: number[]; index: number }>;
-  }>('/embeddings', {
-    method: 'POST',
-    body,
-    spinnerText: 'Generating embeddings...',
-  });
-
-  trackUsage({
-    command: 'embeddings',
-    model: options.model || 'text-embedding-ada-002',
-  });
-
-  return response.data;
-}
-
-// List models
 export async function listModels(
   options: { showSpinner?: boolean } = {}
 ): Promise<Model[]> {
   const { showSpinner: showSpinnerOption = true } = options;
-  const modelTypes = ['text', 'asr', 'embedding', 'image', 'tts', 'upscale', 'inpaint', 'video'];
+  const modelTypes = ['text', 'image'];
   const merged = new Map<string, Model>();
 
-  // API defaults to text-only when no type is provided, so iterate known types
   const requests: Array<{ endpoint: string; requestedType?: string; showSpinner: boolean }> = [
     { endpoint: '/models', showSpinner: showSpinnerOption },
     ...modelTypes.map((type) => ({
@@ -690,24 +378,18 @@ export async function listModels(
 
       for (const model of response.data || []) {
         const normalized: Model = { ...model };
-
-        // Some API responses still label type as text; preserve requested typed endpoint info
         if (
           request.requestedType &&
           (!normalized.type || normalized.type.toLowerCase() === 'text')
         ) {
           normalized.type = request.requestedType;
         }
-
         const key = normalized.id || JSON.stringify(normalized);
         const existing = merged.get(key);
-
         if (!existing) {
           merged.set(key, normalized);
           continue;
         }
-
-        // Prefer non-text type metadata when deduplicating
         const existingType = (existing.type || '').toLowerCase();
         const normalizedType = (normalized.type || '').toLowerCase();
         if (existingType === 'text' && normalizedType && normalizedType !== 'text') {
@@ -715,7 +397,6 @@ export async function listModels(
         }
       }
     } catch (error) {
-      // Keep typed fallback resilient. If the base endpoint fails, surface the error.
       if (!request.requestedType) {
         throw error;
       }
@@ -723,212 +404,4 @@ export async function listModels(
   }
 
   return Array.from(merged.values());
-}
-
-// List characters (if Venice supports this endpoint)
-export async function listCharacters(): Promise<Character[]> {
-  try {
-    const response = await apiRequest<{
-      data: Character[];
-    }>('/characters', {
-      method: 'GET',
-      spinnerText: 'Fetching characters...',
-      retries: 0,
-    });
-    return response.data || [];
-  } catch {
-    // Characters endpoint might not exist
-    return [];
-  }
-}
-
-// Video generation - queue job
-export async function queueVideoGeneration(
-  prompt: string,
-  options: {
-    model?: string;
-    duration?: string;
-    aspectRatio?: string;
-    imageUrl?: string;
-  } = {}
-): Promise<{ queue_id: string; model: string }> {
-  const body: Record<string, unknown> = {
-    model: options.model || 'wan-2.6-text-to-video',
-    prompt,
-    duration: options.duration || '5s',
-    aspect_ratio: options.aspectRatio || '16:9',
-  };
-  if (options.imageUrl) {
-    body.image_url = options.imageUrl;
-  }
-
-  const response = await apiRequest<{
-    queue_id: string;
-    model: string;
-  }>('/video/queue', {
-    method: 'POST',
-    body,
-    spinnerText: 'Queueing video generation...',
-  });
-
-  trackUsage({
-    command: 'video',
-    model: options.model || 'wan-2.6-text-to-video',
-  });
-
-  return response;
-}
-
-// Video generation - check status / retrieve result
-export async function getVideoStatus(
-  queueId: string,
-  model: string
-): Promise<{
-  status: 'PROCESSING' | 'completed' | 'failed';
-  average_execution_time?: number;
-  execution_duration?: number;
-  video_url?: string;
-  error?: string;
-}> {
-  return apiRequest('/video/retrieve', {
-    method: 'POST',
-    body: { queue_id: queueId, model },
-    spinnerText: 'Checking video status...',
-  });
-}
-
-// Video generation - retrieve video
-export async function retrieveVideo(
-  queueId: string,
-  model: string
-): Promise<{
-  video_url?: string;
-  status?: string;
-  model: string;
-  duration?: number;
-}> {
-  return apiRequest('/video/retrieve', {
-    method: 'POST',
-    body: { queue_id: queueId, model, delete_media_on_completion: false },
-    spinnerText: 'Retrieving video...',
-  });
-}
-
-// Web search via chat
-export async function webSearch(
-  query: string,
-  options: {
-    model?: string;
-    maxResults?: number;
-    enableCitations?: boolean;
-    enableScraping?: boolean;
-  } = {}
-): Promise<{
-  content: string;
-  citations?: Array<{ title: string; url: string }>;
-  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
-}> {
-  const veniceParams: Record<string, unknown> = {
-    enable_web_search: 'on',
-  };
-
-  if (options.maxResults) {
-    veniceParams.web_search_max_results = options.maxResults;
-  }
-  if (options.enableCitations) {
-    veniceParams.enable_web_citations = true;
-  }
-  if (options.enableScraping) {
-    veniceParams.enable_web_scraping = true;
-  }
-
-  const response = await chatCompletion(
-    [{ role: 'user', content: query }],
-    {
-      model: options.model,
-      venice_parameters: veniceParams,
-    }
-  );
-
-  return {
-    content: response.content,
-    usage: response.usage,
-  };
-}
-
-// TEE Attestation types
-export type TeeAttestationResponse = {
-  verified?: boolean;
-  nonce: string;
-  model: string;
-  intel_quote?: string;
-  signing_address?: string;
-  signing_key?: string;
-  signing_public_key?: string;
-  nvidia_payload?: string;
-  server_verification?: {
-    tdx?: { valid: boolean; error?: string };
-    nvidia?: { valid: boolean; error?: string };
-    signingAddressBinding?: { bound: boolean; error?: string };
-    nonceBinding?: { bound: boolean; method?: 'sha256' | 'raw'; error?: string };
-    verifiedAt: string;
-    verificationDurationMs: number;
-  };
-  tee_provider?: string;
-};
-
-export type TeeSignatureResponse = {
-  text?: string;
-  signature?: string | { algorithm?: string; value?: string; public_key?: string };
-  signing_address?: string;
-  payload?: { request_hash?: string; response_hash?: string; timestamp?: string };
-  model?: string;
-  request_id?: string;
-  requested_request_id?: string;
-  tee_provider?: string;
-  tee_hardware?: string;
-};
-
-function generateClientNonce(): string {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-// Fetch TEE attestation for a model
-export async function fetchTeeAttestation(
-  modelId: string,
-  options: { showSpinner?: boolean } = {}
-): Promise<{
-  response: TeeAttestationResponse;
-  clientNonce: string;
-}> {
-  const { showSpinner = true } = options;
-  const clientNonce = generateClientNonce();
-  const endpoint = `/tee/attestation?model=${encodeURIComponent(modelId)}&nonce=${clientNonce}`;
-
-  const response = await apiRequest<TeeAttestationResponse>(endpoint, {
-    method: 'GET',
-    showSpinner,
-    spinnerText: 'Fetching TEE attestation...',
-    retries: 5,
-  });
-
-  return { response, clientNonce };
-}
-
-// Fetch TEE signature for a completed request
-export async function fetchTeeSignature(
-  modelId: string,
-  completionId: string
-): Promise<TeeSignatureResponse> {
-  const endpoint = `/tee/signature?request_id=${encodeURIComponent(completionId)}&model=${encodeURIComponent(modelId)}`;
-
-  return apiRequest<TeeSignatureResponse>(endpoint, {
-    method: 'GET',
-    spinnerText: 'Fetching TEE signature...',
-    retries: 1,
-  });
 }
