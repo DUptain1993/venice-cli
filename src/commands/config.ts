@@ -211,7 +211,7 @@ export async function runConfigInit(): Promise<void> {
       if (textModels.length > 0) {
         const displayModels = textModels.slice(0, 8);
         displayModels.forEach((m, i) => console.log(`    ${c.dim(`${i + 1}.`)} ${m}`));
-        const choice = await question(`\n  Choice [1-${displayModels.length}] or model name [kimi-k2-5]: `);
+        const choice = await question(`\n  Choice [1-${displayModels.length}] or model name [gemma-4-uncensored]: `);
         const trimmed = choice.trim();
         const num = parseInt(trimmed, 10);
         if (!isNaN(num) && num >= 1 && num <= displayModels.length) {
@@ -221,10 +221,10 @@ export async function runConfigInit(): Promise<void> {
           setConfigValue('default_model', trimmed);
           console.log(formatSuccess(`Default model: ${trimmed}`));
         } else {
-          console.log(c.dim('  Using default: kimi-k2-5'));
+          console.log(c.dim('  Using default: gemma-4-uncensored'));
         }
       } else {
-        const model = await question('  Default chat model [kimi-k2-5]: ');
+        const model = await question('  Default chat model [gemma-4-uncensored]: ');
         if (model.trim()) setConfigValue('default_model', model.trim());
       }
       console.log('');

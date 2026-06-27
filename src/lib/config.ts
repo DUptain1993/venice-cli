@@ -87,7 +87,7 @@ export function requireApiKey(): string {
 
 export function getDefaultModel(): string {
   const config = loadConfig();
-  return config.default_model || 'kimi-k2-5';
+  return config.default_model || 'gemma-4-uncensored';
 }
 
 export function getDefaultImageModel(): string {
