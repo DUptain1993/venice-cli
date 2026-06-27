@@ -209,7 +209,7 @@ export async function chatCompletion(
   finish_reason: string;
 }> {
   const body: Record<string, unknown> = {
-    model: options.model || 'kimi-k2-5',
+    model: options.model || 'gemma-4-uncensored',
     messages,
     stream: false,
   };
@@ -241,7 +241,7 @@ export async function chatCompletion(
   if (usage) {
     trackUsage({
       command: 'chat',
-      model: options.model || 'kimi-k2-5',
+      model: options.model || 'gemma-4-uncensored',
       ...usage,
     });
   }
@@ -270,7 +270,7 @@ export async function* chatCompletionStream(
   done: boolean;
 }> {
   const body: Record<string, unknown> = {
-    model: options.model || 'kimi-k2-5',
+    model: options.model || 'gemma-4-uncensored',
     messages,
     stream: true,
     stream_options: { include_usage: true },
@@ -316,7 +316,7 @@ export async function* chatCompletionStream(
             if (totalUsage) {
               trackUsage({
                 command: 'chat',
-                model: options.model || 'kimi-k2-5',
+                model: options.model || 'gemma-4-uncensored',
                 ...totalUsage,
               });
             }
