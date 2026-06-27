@@ -47,7 +47,7 @@ export function setConfigValue(key: keyof VeniceConfig, value: string): void {
   const config = loadConfig();
   
   // Handle boolean conversions
-  if (key === 'no_color' || key === 'show_usage') {
+  if (key === 'no_color' || key === 'show_usage' || key === 'auto_approve') {
     (config as any)[key] = value === 'true' || value === '1';
   } else {
     (config as any)[key] = value;
@@ -214,4 +214,25 @@ export function getConfigDir(): string {
 
 export function getConfigPath(): string {
   return CONFIG_FILE;
+}
+
+export function isTermux(): boolean {
+  return (process.env.PREFIX ?? '').includes('com.termux');
+}
+
+export function getAutoApprove(): boolean {
+  const config = loadConfig();
+  return config.auto_approve ?? false;
+}
+
+export function getMaxContextTokens(): number {
+  const config = loadConfig();
+  return config.max_context_tokens ?? 80000;
+}
+
+export function getPreferredShell(): string {
+  const config = loadConfig();
+  if (config.shell) return config.shell;
+  if (isTermux()) return 'bash';
+  return process.env.SHELL?.split('/').pop() ?? 'bash';
 }

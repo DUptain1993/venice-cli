@@ -19,7 +19,9 @@ import { registerModelsCommand } from './commands/models.js';
 import { registerEmbeddingsCommand } from './commands/embeddings.js';
 import { registerHistoryCommand } from './commands/history.js';
 import { registerUsageCommand } from './commands/usage.js';
-import { registerConfigCommand } from './commands/config.js';
+import { registerConfigCommand, runConfigInit } from './commands/config.js';
+import { registerReplCommand } from './commands/repl.js';
+import { registerSuggestCommand } from './commands/suggest.js';
 import { registerCharactersCommand } from './commands/characters.js';
 import { registerCompletionsCommand } from './commands/completions.js';
 import { registerVideoCommands } from './commands/video.js';
@@ -27,12 +29,16 @@ import { registerTeeCommand } from './commands/tee.js';
 import { formatError, getChalk } from './lib/output.js';
 import { getVersion } from './lib/version.js';
 
-// Check for updates in the background (non-blocking, checks once per day)
-const pkg = { name: 'veniceai-cli', version: getVersion() };
-updateNotifier({ pkg, updateCheckInterval: 1000 * 60 * 60 * 24 }).notify({
-  isGlobal: true,
-  message: 'Update available {currentVersion} → {latestVersion}\nRun {updateCommand} to update',
-});
+// Check for updates in the background — wrapped in try/catch for Termux compatibility
+try {
+  const pkg = { name: 'veniceai-cli', version: getVersion() };
+  updateNotifier({ pkg, updateCheckInterval: 1000 * 60 * 60 * 24 }).notify({
+    isGlobal: true,
+    message: 'Update available {currentVersion} → {latestVersion}\nRun {updateCommand} to update',
+  });
+} catch {
+  // Ignore update-notifier errors (can fail on restricted networks or Termux)
+}
 
 async function main() {
   const program = new Command();
@@ -56,6 +62,8 @@ async function main() {
 
   // Register all commands
   registerChatCommand(program);
+  registerReplCommand(program);
+  registerSuggestCommand(program);
   registerSearchCommand(program);
   registerImageCommand(program);
   registerAudioCommands(program);
@@ -68,6 +76,14 @@ async function main() {
   registerCompletionsCommand(program);
   registerVideoCommands(program);
   registerTeeCommand(program);
+
+  // Top-level setup alias
+  program
+    .command('setup')
+    .description('Interactive first-time setup wizard (alias for "config init")')
+    .action(async () => {
+      await runConfigInit();
+    });
 
   // Handle errors gracefully
   program.exitOverride();

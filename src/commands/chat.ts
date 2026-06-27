@@ -12,14 +12,22 @@ import {
 } from '../lib/api.js';
 import {
   getDefaultModel,
+  getMaxContextTokens,
+  getAutoApprove,
   addConversation,
   getLastConversation,
 } from '../lib/config.js';
 import {
   getToolDefinitions,
+  getAgentToolDefinitions,
   executeTool,
   formatToolsHelp,
 } from '../lib/tools.js';
+import {
+  buildCodebaseContext,
+  formatContextAsSystemMessage,
+  buildFileContext,
+} from '../lib/context.js';
 import {
   formatUsage,
   formatError,
@@ -258,6 +266,11 @@ export function registerChatCommand(program: Command): void {
     .option('-q, --quiet', 'Hide E2EE/TEE status messages (show only response)')
     .option('-f, --format <format>', 'Output format (pretty|json|markdown|raw)')
     .option('--list-tools', 'List available tools')
+    .option('--file <paths...>', 'Load specific files into context')
+    .option('--codebase [dir]', 'Load entire codebase into context')
+    .option('--codebase-tokens <n>', 'Token budget for codebase context')
+    .option('--agent', 'Enable agent mode with file and shell tools')
+    .option('--auto-approve', 'Auto-approve all tool calls without prompting')
     .action(async (promptParts: string[], options) => {
       const c = getChalk();
 
@@ -378,12 +391,57 @@ export function registerChatCommand(program: Command): void {
         }
       }
 
+      // Inject codebase context if requested
+      if (options.codebase) {
+        const ctxDir = typeof options.codebase === 'string' ? options.codebase : process.cwd();
+        const maxTokens = parseInt(options.codebsaeTokens ?? String(getMaxContextTokens()), 10);
+        startSpinner('Loading codebase...');
+        try {
+          const ctx = await buildCodebaseContext({ directory: ctxDir, maxTokens });
+          clearSpinner();
+          if (format === 'pretty') {
+            console.log(
+              c.dim(`Loaded ${ctx.totalFiles} files (~${ctx.totalTokens} tokens)`) +
+              (ctx.truncated ? c.yellow(' [truncated]') : '')
+            );
+          }
+          messages.push({ role: 'system', content: formatContextAsSystemMessage(ctx) });
+        } catch (err) {
+          clearSpinner();
+          console.error(formatError(err instanceof Error ? err.message : String(err)));
+          process.exit(1);
+        }
+      }
+
+      // Inject specific files if requested
+      if (options.file?.length) {
+        try {
+          const fileContexts = await buildFileContext(options.file);
+          for (const f of fileContexts) {
+            const ext = f.relativePath.split('.').pop() ?? 'txt';
+            messages.push({
+              role: 'system',
+              content: `File: ${f.relativePath}\n\`\`\`${ext}\n${f.content}\n\`\`\``,
+            });
+          }
+          if (format === 'pretty') {
+            console.log(c.dim(`Loaded ${fileContexts.length} file(s) into context`));
+          }
+        } catch (err) {
+          console.error(formatError(err instanceof Error ? err.message : String(err)));
+          process.exit(1);
+        }
+      }
+
       // Add user message
       messages.push({ role: 'user', content: prompt });
 
       // Get tool definitions
       const toolNames = options.tools?.split(',').map((t: string) => t.trim()) || [];
-      const tools = getToolDefinitions(toolNames);
+      const namedTools = getToolDefinitions(toolNames);
+      const agentTools = options.agent ? getAgentToolDefinitions() : [];
+      const tools = [...agentTools, ...namedTools];
+      const autoApprove: boolean = options.autoApprove ?? getAutoApprove();
 
       // Build venice_parameters
       const veniceParams: Record<string, unknown> = {};
@@ -409,9 +467,9 @@ export function registerChatCommand(program: Command): void {
 
       try {
         if (shouldStream) {
-          await streamChat(messages, model, tools, options.interactiveTools, format, veniceParams, e2eeContext, options.quiet, options.stripThinking);
+          await streamChat(messages, model, tools, options.interactiveTools, format, veniceParams, e2eeContext, options.quiet, options.stripThinking, autoApprove);
         } else {
-          await nonStreamChat(messages, model, tools, options.interactiveTools, format, veniceParams, e2eeContext, options.quiet);
+          await nonStreamChat(messages, model, tools, options.interactiveTools, format, veniceParams, e2eeContext, options.quiet, autoApprove);
         }
 
         // Save to history (don't save encrypted content)
@@ -545,7 +603,8 @@ async function streamChat(
   veniceParams?: Record<string, unknown>,
   e2eeContext?: E2EEContext,
   quiet = false,
-  stripThinking = false
+  stripThinking = false,
+  autoApprove = false
 ): Promise<void> {
   const c = getChalk();
 
@@ -647,7 +706,7 @@ async function streamChat(
         }
 
         const args = parseToolCallArguments(toolCall);
-        const result = await executeTool(toolCall.function.name, args, { interactive: interactiveTools });
+        const result = await executeTool(toolCall.function.name, args, { interactive: interactiveTools, autoApprove });
 
         console.log(c.dim(`\n[Tool: ${toolCall.function.name}]`));
         console.log(result);
@@ -808,7 +867,8 @@ async function nonStreamChat(
   format: OutputFormat,
   veniceParams?: Record<string, unknown>,
   e2eeContext?: E2EEContext,
-  _quiet = false
+  _quiet = false,
+  autoApprove = false
 ): Promise<void> {
   // E2EE requires streaming for response decryption
   if (e2eeContext) {
@@ -825,7 +885,7 @@ async function nonStreamChat(
   if (response.tool_calls?.length) {
     for (const toolCall of response.tool_calls) {
       const args = JSON.parse(toolCall.function.arguments || '{}');
-      const result = await executeTool(toolCall.function.name, args, { interactive: interactiveTools });
+      const result = await executeTool(toolCall.function.name, args, { interactive: interactiveTools, autoApprove });
 
       messages.push({
         role: 'assistant',

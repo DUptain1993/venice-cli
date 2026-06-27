@@ -10,6 +10,9 @@ export interface VeniceConfig {
   output_format?: OutputFormat;
   no_color?: boolean;
   show_usage?: boolean;
+  auto_approve?: boolean;
+  max_context_tokens?: number;
+  shell?: string;
 }
 
 export type OutputFormat = 'pretty' | 'json' | 'markdown' | 'raw';
