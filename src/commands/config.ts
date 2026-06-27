@@ -3,7 +3,7 @@
  */
 
 import { Command } from 'commander';
-import * as readline from 'readline';
+import * as readline from 'readline/promises';
 import {
   loadConfig,
   setConfigValue,
@@ -164,9 +164,23 @@ export function registerConfigCommand(program: Command): void {
 export async function runConfigInit(): Promise<void> {
   const c = getChalk();
 
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const question = (prompt: string): Promise<string> =>
-    new Promise(resolve => rl.question(prompt, resolve));
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    terminal: true,
+  });
+
+  rl.on('SIGINT', () => { rl.close(); process.exit(0); });
+
+  // If readline closes before the callback fires (Termux empty-Enter quirk),
+  // resolve with '' so the wizard treats it as "accept default" rather than hanging.
+  const question = async (prompt: string): Promise<string> => {
+    try {
+      return await rl.question(prompt);
+    } catch {
+      return '';
+    }
+  };
 
   const onTermux = isTermux();
 
