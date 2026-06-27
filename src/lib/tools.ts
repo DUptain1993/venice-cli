@@ -1,12 +1,27 @@
 /**
  * Built-in Tools for Function Calling
- * 
+ *
  * These tools can be used with --tools flag in chat command.
  */
 
 import type { ToolDefinition } from '../types/index.js';
 import * as readline from 'readline';
+import * as fs from 'fs/promises';
+import * as path from 'path';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { getChalk } from './output.js';
+
+const execAsync = promisify(exec);
+
+// Patterns ignored by list_files and search_files
+const FS_IGNORE_NAMES = new Set([
+  'node_modules', '.git', 'dist', 'build', 'out', 'target',
+  'coverage', '.next', '.nuxt', '__pycache__', 'vendor',
+]);
+
+// Tools that always require approval unless autoApprove is set
+const DESTRUCTIVE_TOOLS = new Set(['run_shell', 'write_file', 'delete_file']);
 
 // Built-in tool definitions
 export const BUILTIN_TOOLS: Record<string, ToolDefinition> = {
@@ -147,6 +162,106 @@ export const BUILTIN_TOOLS: Record<string, ToolDefinition> = {
           },
         },
         required: ['algorithm', 'text'],
+      },
+    },
+  },
+
+  read_file: {
+    type: 'function',
+    function: {
+      name: 'read_file',
+      description: 'Read the contents of a file. Returns text content. Supports optional line offset and limit.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'File path (relative to cwd or absolute)' },
+          offset: { type: 'number', description: 'Line number to start reading from (1-based, optional)' },
+          limit: { type: 'number', description: 'Maximum number of lines to return (optional)' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+
+  write_file: {
+    type: 'function',
+    function: {
+      name: 'write_file',
+      description: 'Write content to a file, creating parent directories if needed. Overwrites existing files.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'File path to write to' },
+          content: { type: 'string', description: 'Content to write' },
+        },
+        required: ['path', 'content'],
+      },
+    },
+  },
+
+  list_files: {
+    type: 'function',
+    function: {
+      name: 'list_files',
+      description: 'List files in a directory recursively. Skips node_modules, .git, and build directories.',
+      parameters: {
+        type: 'object',
+        properties: {
+          directory: { type: 'string', description: 'Directory to list (defaults to current directory)' },
+          pattern: { type: 'string', description: 'Glob pattern to filter files (e.g. "**/*.ts")' },
+          max_depth: { type: 'number', description: 'Maximum recursion depth (default: 5)' },
+        },
+        required: [],
+      },
+    },
+  },
+
+  search_files: {
+    type: 'function',
+    function: {
+      name: 'search_files',
+      description: 'Search for a regex pattern in file contents. Returns matching file, line number, and text.',
+      parameters: {
+        type: 'object',
+        properties: {
+          pattern: { type: 'string', description: 'Regex pattern to search for' },
+          directory: { type: 'string', description: 'Directory to search in (defaults to cwd)' },
+          file_pattern: { type: 'string', description: 'Glob pattern to restrict which files to search (e.g. "*.ts")' },
+        },
+        required: ['pattern'],
+      },
+    },
+  },
+
+  delete_file: {
+    type: 'function',
+    function: {
+      name: 'delete_file',
+      description: 'Delete a file. Requires confirm:true to prevent accidental deletion.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'File path to delete' },
+          confirm: { type: 'boolean', description: 'Must be true to confirm deletion' },
+        },
+        required: ['path', 'confirm'],
+      },
+    },
+  },
+
+  run_shell: {
+    type: 'function',
+    function: {
+      name: 'run_shell',
+      description: 'Execute a shell command in the current working directory. Returns stdout, stderr, and exit code.',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: 'Shell command to execute' },
+          cwd: { type: 'string', description: 'Working directory override (optional)' },
+          timeout: { type: 'number', description: 'Timeout in milliseconds (default: 30000)' },
+        },
+        required: ['command'],
       },
     },
   },
@@ -352,7 +467,60 @@ function evaluateRPN(tokens: (Token | { type: 'function'; value: string; argCoun
   return stack[0];
 }
 
-// Tool execution functions
+// ── File system helpers ──────────────────────────────────────────────────────
+
+function globToRegex(pattern: string): RegExp {
+  let result = '';
+  let i = 0;
+  while (i < pattern.length) {
+    const c = pattern[i];
+    if (c === '*' && pattern[i + 1] === '*') {
+      result += '.*';
+      i += 2;
+      if (pattern[i] === '/') i++;
+    } else if (c === '*') {
+      result += '[^/]*';
+      i++;
+    } else if (c === '?') {
+      result += '[^/]';
+      i++;
+    } else if (/[.+^${}()|[\]\\]/.test(c)) {
+      result += '\\' + c;
+      i++;
+    } else {
+      result += c;
+      i++;
+    }
+  }
+  return new RegExp(result + '$');
+}
+
+async function walkDir(
+  dir: string,
+  maxDepth: number,
+  depth: number = 0
+): Promise<string[]> {
+  if (depth >= maxDepth) return [];
+  const files: string[] = [];
+  try {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (FS_IGNORE_NAMES.has(entry.name) || entry.name.startsWith('.')) continue;
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        files.push(...await walkDir(fullPath, maxDepth, depth + 1));
+      } else if (entry.isFile()) {
+        files.push(fullPath);
+      }
+    }
+  } catch {
+    // Skip unreadable directories
+  }
+  return files;
+}
+
+// ── Tool execution functions ─────────────────────────────────────────────────
+
 const toolExecutors: Record<string, (args: Record<string, unknown>) => Promise<string>> = {
   async calculator(args: Record<string, unknown>): Promise<string> {
     try {
@@ -463,15 +631,141 @@ const toolExecutors: Record<string, (args: Record<string, unknown>) => Promise<s
     const algorithm = args.algorithm as string;
     const text = args.text as string;
     const validAlgorithms = ['md5', 'sha1', 'sha256', 'sha512'];
-    
+
     if (!validAlgorithms.includes(algorithm)) {
       return `Error: Invalid hash algorithm "${algorithm}". Use one of: ${validAlgorithms.join(', ')}`;
     }
-    
+
     const crypto = await import('crypto');
     const hash = crypto.createHash(algorithm);
     hash.update(text);
     return hash.digest('hex');
+  },
+
+  async read_file(args: Record<string, unknown>): Promise<string> {
+    const filePath = path.resolve(process.cwd(), args.path as string);
+    const offset = typeof args.offset === 'number' ? Math.max(1, args.offset) : 1;
+    const limit = typeof args.limit === 'number' ? args.limit : undefined;
+
+    try {
+      const stat = await fs.stat(filePath);
+      if (stat.size > 1024 * 1024) {
+        return JSON.stringify({ error: `File too large (${Math.round(stat.size / 1024)}KB). Max 1MB.` });
+      }
+      const content = await fs.readFile(filePath, 'utf-8');
+      const lines = content.split('\n');
+      const startIdx = offset - 1;
+      const endIdx = limit !== undefined ? startIdx + limit : lines.length;
+      const selected = lines.slice(startIdx, endIdx);
+      return JSON.stringify({
+        path: args.path,
+        lines: selected.length,
+        total_lines: lines.length,
+        content: selected.join('\n'),
+      });
+    } catch (err) {
+      return JSON.stringify({ error: `Cannot read "${args.path}": ${err instanceof Error ? err.message : String(err)}` });
+    }
+  },
+
+  async write_file(args: Record<string, unknown>): Promise<string> {
+    const filePath = path.resolve(process.cwd(), args.path as string);
+    const content = args.content as string;
+    try {
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, content, 'utf-8');
+      return JSON.stringify({ success: true, path: args.path, bytes: Buffer.byteLength(content, 'utf-8') });
+    } catch (err) {
+      return JSON.stringify({ error: `Cannot write "${args.path}": ${err instanceof Error ? err.message : String(err)}` });
+    }
+  },
+
+  async list_files(args: Record<string, unknown>): Promise<string> {
+    const dir = path.resolve(process.cwd(), (args.directory as string | undefined) ?? '.');
+    const pattern = args.pattern as string | undefined;
+    const maxDepth = typeof args.max_depth === 'number' ? args.max_depth : 5;
+    const patternRegex = pattern ? globToRegex(pattern) : null;
+
+    try {
+      const allFiles = await walkDir(dir, maxDepth);
+      const relFiles = allFiles
+        .map(f => path.relative(dir, f))
+        .filter(f => !patternRegex || patternRegex.test(f))
+        .slice(0, 500);
+      return JSON.stringify({ directory: args.directory ?? '.', count: relFiles.length, files: relFiles });
+    } catch (err) {
+      return JSON.stringify({ error: `Cannot list "${args.directory}": ${err instanceof Error ? err.message : String(err)}` });
+    }
+  },
+
+  async search_files(args: Record<string, unknown>): Promise<string> {
+    const dir = path.resolve(process.cwd(), (args.directory as string | undefined) ?? '.');
+    const pattern = args.pattern as string;
+    const filePattern = args.file_pattern as string | undefined;
+    const fileRegex = filePattern ? globToRegex(filePattern) : null;
+
+    let regex: RegExp;
+    try {
+      regex = new RegExp(pattern, 'i');
+    } catch {
+      return JSON.stringify({ error: `Invalid regex: ${pattern}` });
+    }
+
+    const allFiles = await walkDir(dir, 8);
+    const matches: Array<{ file: string; line: number; content: string }> = [];
+
+    for (const filePath of allFiles) {
+      const rel = path.relative(dir, filePath);
+      if (fileRegex && !fileRegex.test(rel)) continue;
+      try {
+        const stat = await fs.stat(filePath);
+        if (stat.size > 1024 * 1024) continue;
+        const content = await fs.readFile(filePath, 'utf-8');
+        const lines = content.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+          if (regex.test(lines[i])) {
+            matches.push({ file: rel, line: i + 1, content: lines[i].trim().slice(0, 200) });
+            if (matches.length >= 50) break;
+          }
+        }
+        if (matches.length >= 50) break;
+      } catch {
+        // Skip unreadable files
+      }
+    }
+
+    return JSON.stringify({ pattern, count: matches.length, matches });
+  },
+
+  async delete_file(args: Record<string, unknown>): Promise<string> {
+    if (args.confirm !== true) {
+      return JSON.stringify({ error: 'confirm must be true to delete a file' });
+    }
+    const filePath = path.resolve(process.cwd(), args.path as string);
+    try {
+      await fs.unlink(filePath);
+      return JSON.stringify({ success: true, path: args.path });
+    } catch (err) {
+      return JSON.stringify({ error: `Cannot delete "${args.path}": ${err instanceof Error ? err.message : String(err)}` });
+    }
+  },
+
+  async run_shell(args: Record<string, unknown>): Promise<string> {
+    const command = args.command as string;
+    const cwd = args.cwd ? path.resolve(args.cwd as string) : process.cwd();
+    const timeout = typeof args.timeout === 'number' ? args.timeout : 30000;
+    try {
+      const { stdout, stderr } = await execAsync(command, { cwd, timeout });
+      return JSON.stringify({ success: true, command, stdout: stdout.slice(0, 8000), stderr: stderr.slice(0, 2000), exit_code: 0 });
+    } catch (err: any) {
+      return JSON.stringify({
+        success: false,
+        command,
+        stdout: (err.stdout ?? '').slice(0, 8000),
+        stderr: (err.stderr ?? err.message ?? '').slice(0, 2000),
+        exit_code: err.code ?? 1,
+      });
+    }
   },
 };
 
@@ -488,15 +782,18 @@ export function listAvailableTools(): string[] {
 export async function executeTool(
   name: string,
   args: unknown,
-  options: { interactive?: boolean } = {}
+  options: { interactive?: boolean; autoApprove?: boolean } = {}
 ): Promise<string> {
   const executor = toolExecutors[name];
   if (!executor) {
     return `Unknown tool: ${name}`;
   }
 
-  // Interactive approval mode
-  if (options.interactive) {
+  // Destructive tools always prompt unless autoApprove is set
+  const needsApproval =
+    options.interactive || (DESTRUCTIVE_TOOLS.has(name) && !options.autoApprove);
+
+  if (needsApproval) {
     const approved = await promptForApproval(name, args);
     if (!approved) {
       return 'Tool execution cancelled by user';
@@ -508,6 +805,12 @@ export async function executeTool(
   } catch (error) {
     return `Tool error: ${error}`;
   }
+}
+
+export function getAgentToolDefinitions(): ToolDefinition[] {
+  return ['read_file', 'write_file', 'list_files', 'search_files', 'delete_file', 'run_shell']
+    .map(name => BUILTIN_TOOLS[name])
+    .filter(Boolean);
 }
 
 async function promptForApproval(name: string, args: unknown): Promise<boolean> {
